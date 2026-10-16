@@ -1,0 +1,87 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: DeployBox - Serverless Static Deployment Platform (Educate Friendly)
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 60
+    MemorySize: 512
+    Environment:
+      Variables:
+        DEPLOY_BUCKET: !Ref DeployBucket
+        LOG_TABLE: !Ref DeploymentTable
+        SNS_TOPIC: !Ref NotifyTopic
+
+Resources:
+  DeployBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      BucketName: !Sub deploybox-assets-${AWS::AccountId}
+
+  DashboardBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub deploybox-dashboard-${AWS::AccountId}
+
+  DeploymentTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: deploybox-deployments
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: deploymentId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: deploymentId
+          KeyType: HASH
+
+  NotifyTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: deploybox-notifications
+
+  WebhookHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../src/webhook_handler/
+      Handler: app.lambda_handler
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            Path: /webhook
+            Method: post
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref DeploymentTable
+        - S3WritePolicy:
+            BucketName: !Ref DeployBucket
+
+  DeployEngineFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../src/deploy_engine/
+      Handler: app.lambda_handler
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref DeployBucket
+        - DynamoDBWritePolicy:
+            TableName: !Ref DeploymentTable
+
+  NotifierFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../src/notifier/
+      Handler: app.lambda_handler
+      Policies:
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt NotifyTopic.TopicName
+
+Outputs:
+  ApiEndpoint:
+    Value: !Sub https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/webhook
+  DeployBucketName:
+    Value: !Ref DeployBucket
