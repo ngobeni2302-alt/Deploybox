@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Transform: AWS::Serverless-2016-10-31
-Description: DeployBox - Serverless Static Deployment Platform (Educate Friendly)
+Transform: 【entity-AWS¦canonical_name=AWS】::Serverless-2016-10-31
+Description: DeployBox - Serverless Static Deployment Platform (40% - Object Storage Live)
 
 Globals:
   Function:
@@ -10,16 +10,35 @@ Globals:
     Environment:
       Variables:
         DEPLOY_BUCKET: !Ref DeployBucket
-        LOG_TABLE: !Ref DeploymentTable
+        TABLE_NAME: !Ref DeploymentTable
         SNS_TOPIC: !Ref NotifyTopic
+        LOG_TABLE: !Ref DeploymentTable
 
 Resources:
   DeployBucket:
-    Type: AWS::S3::Bucket
+    Type: 【entity-AWS¦canonical_name=AWS】::S3::Bucket
     Properties:
+      BucketName: !Sub deploybox-assets-${AWS::AccountId}
       VersioningConfiguration:
         Status: Enabled
-      BucketName: !Sub deploybox-assets-${AWS::AccountId}
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      PublicReadPolicy: false
+
+  DeployBucketPolicy:
+    Type: 【entity-AWS¦canonical_name=AWS】::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DeployBucket
+      PolicyDocument:
+        Statement:
+                    - Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub ${DeployBucket.Arn}/*
+            Condition:
+              StringLike:
+                s3:prefix: ["*"]
 
   DashboardBucket:
     Type: AWS::S3::Bucket
@@ -32,10 +51,10 @@ Resources:
       TableName: deploybox-deployments
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - AttributeName: deploymentId
+                - AttributeName: deploymentId
           AttributeType: S
       KeySchema:
-        - AttributeName: deploymentId
+                - AttributeName: deploymentId
           KeyType: HASH
 
   NotifyTopic:
@@ -48,6 +67,10 @@ Resources:
     Properties:
       CodeUri: ../src/webhook_handler/
       Handler: app.lambda_handler
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref DeploymentTable
+          DEPLOY_ENGINE_FUNCTION: !Ref DeployEngineFunction
       Events:
         Api:
           Type: Api
@@ -55,9 +78,11 @@ Resources:
             Path: /webhook
             Method: post
       Policies:
-        - DynamoDBWritePolicy:
+                - DynamoDBCrudPolicy:
             TableName: !Ref DeploymentTable
-        - S3WritePolicy:
+                - LambdaInvokePolicy:
+            FunctionName: !Ref DeployEngineFunction
+                - S3WritePolicy:
             BucketName: !Ref DeployBucket
 
   DeployEngineFunction:
@@ -66,10 +91,12 @@ Resources:
       CodeUri: ../src/deploy_engine/
       Handler: app.lambda_handler
       Policies:
-        - S3CrudPolicy:
+                - S3CrudPolicy:
             BucketName: !Ref DeployBucket
-        - DynamoDBWritePolicy:
+                - DynamoDBCrudPolicy:
             TableName: !Ref DeploymentTable
+                - SNSPublishMessagePolicy:
+            TopicName: !GetAtt NotifyTopic.TopicName
 
   NotifierFunction:
     Type: AWS::Serverless::Function
@@ -77,11 +104,13 @@ Resources:
       CodeUri: ../src/notifier/
       Handler: app.lambda_handler
       Policies:
-        - SNSPublishMessagePolicy:
+                - SNSPublishMessagePolicy:
             TopicName: !GetAtt NotifyTopic.TopicName
 
 Outputs:
   ApiEndpoint:
-    Value: !Sub https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/webhook
+    Value: !Sub https://${ServerlessRestApi}.execute-api.${【entity-AWS¦canonical_name=AWS】::Region}.amazonaws.com/Prod/webhook
   DeployBucketName:
     Value: !Ref DeployBucket
+  WebsiteURL:
+    Value: !Sub http://${DeployBucket}.s3-website-${AWS::Region}.amazonaws.com
