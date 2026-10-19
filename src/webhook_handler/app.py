@@ -1,107 +1,121 @@
 
 import json
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 
 import boto3
 
-TABLE_NAME = os.environ['TABLE_NAME']
-DEPLOY_ENGINE_FUNCTION = os.environ['DEPLOY_ENGINE_FUNCTION']
+dynamodb = boto3.resource("dynamodb")
+lambda_client = boto3.client("lambda")
 
-table = boto3.resource('dynamodb').Table(TABLE_NAME)
-lambda_client = boto3.client('lambda')
+TABLE = os.environ["TABLE_NAME"]
+ENGINE = os.environ["DEPLOY_ENGINE_FUNCTION"]
+
+REPO_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
+
+
+def response(code, body):
+    return {
+        "statusCode": code,
+        "headers": {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*",
+        },
+        "body": json.dumps(body),
+    }
 
 
 def lambda_handler(event, context):
     try:
-        body = event.get('body') or {}
+        body = event.get("body") or "{}"
+        data = json.loads(body) if isinstance(body, str) else body
 
-        if isinstance(body, str):
-            body = json.loads(body)
+        if not isinstance(data, dict):
+            raise ValueError("Body must be an object")
 
-        if not isinstance(body, dict):
-            raise ValueError('JSON object required')
+        repo_data = data.get("repository") or {}
+        repo = (
+            repo_data.get("full_name")
+            if isinstance(repo_data, dict)
+            else None
+        )
 
-        repository = body.get('repository') or {}
-        repo = repository.get('full_name', 'manual-test')
+        ref = data.get("ref") or "HEAD"
+
+        if not isinstance(repo, str) or not REPO_PATTERN.fullmatch(repo):
+            raise ValueError(
+                "repository.full_name must be owner/repo"
+            )
 
         if (
-            not isinstance(repo, str)
-            or not repo
-            or '/' not in repo
-            or any(
-                part in ('', '.', '..')
-                for part in repo.split('/')
-            )
+            not isinstance(ref, str)
+            or len(ref) > 200
+            or not re.fullmatch(r"[A-Za-z0-9_./-]+", ref)
+            or ".." in ref
         ):
-            raise ValueError(
-                'repository.full_name must be owner/repo'
-            )
+            raise ValueError("Invalid ref")
 
-    except (
-        ValueError,
-        TypeError,
-        AttributeError,
-        json.JSONDecodeError
-    ) as exc:
-        return {
-            'statusCode': 400,
-            'body': json.dumps({'error': str(exc)})
-        }
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        return response(400, {"error": str(exc)})
 
-    deployment_id = uuid.uuid4().hex[:8]
+    deployment_id = uuid.uuid4().hex[:12]
+
+    table = dynamodb.Table(TABLE)
 
     table.put_item(
         Item={
-            'deploymentId': deployment_id,
-            'repo': repo,
-            'status': 'RECEIVED',
-            'timestamp': datetime.now(
-                timezone.utc
-            ).isoformat()
+            "deploymentId": deployment_id,
+            "repo": repo,
+            "ref": ref,
+            "status": "RECEIVED",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
     )
 
     try:
-        response = lambda_client.invoke(
-            FunctionName=DEPLOY_ENGINE_FUNCTION,
-            InvocationType='Event',
-            Payload=json.dumps({
-                'repo': repo,
-                'deploymentId': deployment_id
-            }).encode('utf-8')
+        result = lambda_client.invoke(
+            FunctionName=ENGINE,
+            InvocationType="Event",
+            Payload=json.dumps(
+                {
+                    "repo": repo,
+                    "ref": ref,
+                    "deploymentId": deployment_id,
+                }
+            ).encode(),
         )
 
-        if response.get('StatusCode') != 202:
+        if result.get("StatusCode") != 202:
             raise RuntimeError(
-                f'Unexpected invoke status: '
-                f'{response.get("StatusCode")}'
+                "Asynchronous Lambda invocation not accepted"
             )
 
     except Exception as exc:
         table.update_item(
-            Key={
-                'deploymentId': deployment_id
-            },
-            UpdateExpression=(
-                'SET #s = :s, error_msg = :e'
-            ),
-            ExpressionAttributeNames={
-                '#s': 'status'
-            },
+            Key={"deploymentId": deployment_id},
+            UpdateExpression="SET #s = :s, error_msg = :e",
+            ExpressionAttributeNames={"#s": "status"},
             ExpressionAttributeValues={
-                ':s': 'FAILED',
-                ':e': str(exc)
-            }
+                ":s": "FAILED",
+                ":e": str(exc)[:500],
+            },
         )
-        raise
 
-    return {
-        'statusCode': 202,
-        'body': json.dumps({
-            'message': 'Webhook received',
-            'deploymentId': deployment_id,
-            'status': 'RECEIVED'
-        })
-    }
+        return response(
+            502,
+            {
+                "error": "Deployment could not be started",
+                "deploymentId": deployment_id,
+            },
+        )
+
+    return response(
+        202,
+        {
+            "message": "Deployment queued",
+            "deploymentId": deployment_id,
+            "status": "RECEIVED",
+        },
+    )
