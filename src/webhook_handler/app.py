@@ -1,50 +1,107 @@
-import json, os, boto3, uuid
 
-dynamodb = boto3.resource('dynamodb')
+import json
+import os
+import uuid
+from datetime import datetime, timezone
+
+import boto3
+
+TABLE_NAME = os.environ['TABLE_NAME']
+DEPLOY_ENGINE_FUNCTION = os.environ['DEPLOY_ENGINE_FUNCTION']
+
+table = boto3.resource('dynamodb').Table(TABLE_NAME)
 lambda_client = boto3.client('lambda')
 
 
-TABLE = os.environ.get('TABLE_NAME')
-DEPLOY_ENGINE_FUNCTION = os.environ.get('DEPLOY_ENGINE_FUNCTION')
-
 def lambda_handler(event, context):
-    print(f"Webhook event: {event}")
+    try:
+        body = event.get('body') or {}
 
-
-    body = event.get('body')
-    if isinstance(body, str):
-        try:
+        if isinstance(body, str):
             body = json.loads(body)
-        except:
-            body = {}
-    repo = "manual-test"
-    if body and 'repository' in body:
-        repo = body['repository'].get('full_name', 'manual-test')
 
+        if not isinstance(body, dict):
+            raise ValueError('JSON object required')
 
+        repository = body.get('repository') or {}
+        repo = repository.get('full_name', 'manual-test')
 
-    deployment_id = uuid.uuid4()[:8]
-    
-    table = dynamodb.Table(TABLE_NAME)
-    table.put_item(Item={
-        'deploymentId': deployment_id,
-        'repo': repo,
-        'status': 'RECEIVED',
-        'timestamp': context.aws_request_id if hasattr(context, 'aws_request_id') else deployment_id
-    })
-
-    if DEPLOY_ENGINE_FUNCTION:
-        try:
-            lambda_client.invoke(
-                FunctionName=DEPLOY_ENGINE_FUNCTION,
-                InvocationType='Event',
-                Payload=json.dumps({'repo': repo, 'deploymentId': deployment_id})
+        if (
+            not isinstance(repo, str)
+            or not repo
+            or '/' not in repo
+            or any(
+                part in ('', '.', '..')
+                for part in repo.split('/')
             )
-            print(f"Invoked {DEPLOY_ENGINE_FUNCTION} for {deployment_id}")
-        except Exception as e:
-            print(f"Failed to invoke deploy engine: {e}")
+        ):
+            raise ValueError(
+                'repository.full_name must be owner/repo'
+            )
+
+    except (
+        ValueError,
+        TypeError,
+        AttributeError,
+        json.JSONDecodeError
+    ) as exc:
+        return {
+            'statusCode': 400,
+            'body': json.dumps({'error': str(exc)})
+        }
+
+    deployment_id = uuid.uuid4().hex[:8]
+
+    table.put_item(
+        Item={
+            'deploymentId': deployment_id,
+            'repo': repo,
+            'status': 'RECEIVED',
+            'timestamp': datetime.now(
+                timezone.utc
+            ).isoformat()
+        }
+    )
+
+    try:
+        response = lambda_client.invoke(
+            FunctionName=DEPLOY_ENGINE_FUNCTION,
+            InvocationType='Event',
+            Payload=json.dumps({
+                'repo': repo,
+                'deploymentId': deployment_id
+            }).encode('utf-8')
+        )
+
+        if response.get('StatusCode') != 202:
+            raise RuntimeError(
+                f'Unexpected invoke status: '
+                f'{response.get("StatusCode")}'
+            )
+
+    except Exception as exc:
+        table.update_item(
+            Key={
+                'deploymentId': deployment_id
+            },
+            UpdateExpression=(
+                'SET #s = :s, error_msg = :e'
+            ),
+            ExpressionAttributeNames={
+                '#s': 'status'
+            },
+            ExpressionAttributeValues={
+                ':s': 'FAILED',
+                ':e': str(exc)
+            }
+        )
+        raise
 
     return {
-        'statusCode': 200,
-        'body': json.dumps({'message': 'Webhook received', 'deploymentId': deployment_id, 'status': 'RECEIVED'})
+        'statusCode': 202,
+        'body': json.dumps({
+            'message': 'Webhook received',
+            'deploymentId': deployment_id,
+            'status': 'RECEIVED'
+        })
     }
