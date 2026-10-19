@@ -1,145 +1,204 @@
 
+import io
 import mimetypes
 import os
-from pathlib import Path
+import re
+import urllib.request
+import zipfile
+from datetime import datetime, timezone
 from urllib.parse import quote
 
 import boto3
 
-BUCKET = os.environ['DEPLOY_BUCKET']
-TABLE_NAME = os.environ['TABLE_NAME']
-REGION = os.environ.get('AWS_REGION', 'us-east-1')
+s3 = boto3.client("s3")
+dynamodb = boto3.resource("dynamodb")
 
-s3 = boto3.client('s3')
-table = boto3.resource('dynamodb').Table(TABLE_NAME)
+BUCKET = os.environ["DEPLOY_BUCKET"]
+TABLE = os.environ["TABLE_NAME"]
+REGION = os.environ.get("AWS_REGION", "us-east-1")
+
+MAX_ZIP_BYTES = 15 * 1024 * 1024
+MAX_TOTAL_BYTES = 30 * 1024 * 1024
+MAX_FILES = 250
+
+
+def update(deployment_id, status, **extra):
+    names = {"#status": "status"}
+    values = {":status": status}
+    assignments = ["#status = :status"]
+
+    for idx, (key, value) in enumerate(extra.items()):
+        name = f"#f{idx}"
+        token = f":v{idx}"
+
+        names[name] = key
+        values[token] = value
+        assignments.append(f"{name} = {token}")
+
+    dynamodb.Table(TABLE).update_item(
+        Key={"deploymentId": deployment_id},
+        UpdateExpression="SET " + ", ".join(assignments),
+        ExpressionAttributeNames=names,
+        ExpressionAttributeValues=values,
+        ConditionExpression="attribute_exists(deploymentId)",
+    )
+
+
+def download_zip(repo, ref):
+    # Download an archive from a public GitHub repository.
+    url = f"https://api.github.com/repos/{repo}/zipball"
+
+    if ref != "HEAD":
+        url += "/" + quote(ref, safe="")
+
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "DeployBox/0.6"},
+    )
+
+    with urllib.request.urlopen(request, timeout=15) as response:
+        data = response.read(MAX_ZIP_BYTES + 1)
+
+    if len(data) > MAX_ZIP_BYTES:
+        raise ValueError("Repository archive exceeds 15 MB")
+
+    return zipfile.ZipFile(io.BytesIO(data))
+
+
+def extract_static_files(archive):
+    candidates = []
+    total = 0
+
+    for item in archive.infolist():
+        if item.is_dir():
+            continue
+
+        # GitHub archives contain one top-level directory.
+        parts = item.filename.split("/")
+
+        if len(parts) < 2:
+            continue
+
+        relative = "/".join(parts[1:])
+
+        if not relative or any(
+            part in ("", ".", "..")
+            for part in relative.split("/")
+        ):
+            raise ValueError("Unsafe archive path")
+
+        if relative.startswith(".") or any(
+            part.startswith(".")
+            for part in relative.split("/")
+        ):
+            continue
+
+        # Exclude common development-only directories.
+        if relative.split("/")[0] in (
+            "node_modules",
+            "src",
+            "tests",
+            "test",
+            "infra",
+            "docs",
+        ):
+            continue
+
+        # Exclude common non-static project files.
+        if relative.endswith(
+            (
+                ".py",
+                ".env",
+                ".yaml",
+                ".yml",
+                ".toml",
+                ".md",
+                ".json",
+                ".lock",
+                ".sh",
+            )
+        ):
+            continue
+
+        # Reject symbolic links.
+        if (item.external_attr >> 16) & 0o170000 == 0o120000:
+            raise ValueError("Symbolic links are not supported")
+
+        total += item.file_size
+        candidates.append((relative, item))
+
+        if total > MAX_TOTAL_BYTES or len(candidates) > MAX_FILES:
+            raise ValueError("Repository exceeds deployment limits")
+
+    if not any(path == "index.html" for path, _ in candidates):
+        raise ValueError(
+            "Public repository must contain index.html in its root"
+        )
+
+    return candidates
 
 
 def lambda_handler(event, context):
-    repo = event['repo']
-    deployment_id = event['deploymentId']
+    repo = event["repo"]
+    deployment_id = event["deploymentId"]
+    ref = event.get("ref", "HEAD")
 
-    prefix = f'{repo}/{deployment_id}'
-    latest_prefix = f'{repo}/latest'
-
-    source_dir = (
-        Path(__file__).resolve().parent / 'template-site'
-    )
-
-    uploaded = []
+    if not re.fullmatch(
+        r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+",
+        repo,
+    ):
+        raise ValueError("Invalid repository")
 
     try:
-        # Find static website files
-        paths = (
-            sorted(
-                p for p in source_dir.rglob('*')
-                if p.is_file()
-            )
-            if source_dir.is_dir()
-            else []
-        )
+        update(deployment_id, "BUILDING")
 
-        # Fallback HTML when no template files exist
-        if not paths:
-            html = (
-                '<!doctype html>'
-                '<html>'
-                '<head>'
-                '<meta charset="utf-8">'
-                '<title>DeployBox</title>'
-                '</head>'
-                '<body>'
-                '<h1>DeployBox Live</h1>'
-                f'<p>Repo: {repo}</p>'
-                f'<p>Deployment: {deployment_id}</p>'
-                '</body>'
-                '</html>'
-            ).encode('utf-8')
+        with download_zip(repo, ref) as archive:
+            files = extract_static_files(archive)
+            uploaded = []
 
-            objects = [
-                ('index.html', html)
-            ]
+            for relative, info in files:
+                data = archive.read(info)
 
-        else:
-            objects = [
-                (
-                    p.relative_to(
-                        source_dir
-                    ).as_posix(),
-                    p.read_bytes()
-                )
-                for p in paths
-            ]
-
-        # Upload each file to versioned and latest paths
-        for relative_path, contents in objects:
-            content_type = (
-                mimetypes.guess_type(relative_path)[0]
-                or 'application/octet-stream'
-            )
-
-            keys = [
-                f'{prefix}/{relative_path}',
-                f'{latest_prefix}/{relative_path}'
-            ]
-
-            for key in keys:
-                s3.put_object(
-                    Bucket=BUCKET,
-                    Key=key,
-                    Body=contents,
-                    ContentType=content_type
+                content_type = (
+                    mimetypes.guess_type(relative)[0]
+                    or "application/octet-stream"
                 )
 
-                uploaded.append(key)
+                for prefix in (deployment_id, "latest"):
+                    s3.put_object(
+                        Bucket=BUCKET,
+                        Key=f"{repo}/{prefix}/{relative}",
+                        Body=data,
+                        ContentType=content_type,
+                    )
 
-        # Generate S3 website URL
-        website_url = (
-            f'http://{BUCKET}.'
-            f's3-website-{REGION}.amazonaws.com/'
-            f'{quote(latest_prefix, safe="/")}/index.html'
+                uploaded.append(
+                    f"{repo}/{deployment_id}/{relative}"
+                )
+
+        url = (
+            f"http://{BUCKET}.s3-website-{REGION}"
+            f".amazonaws.com/{repo}/latest/index.html"
         )
 
-        # Update DynamoDB to DEPLOYED
-        table.update_item(
-            Key={
-                'deploymentId': deployment_id
-            },
-            UpdateExpression=(
-                'SET #s = :s, '
-                's3_keys = :keys, '
-                'website_url = :url'
-            ),
-            ExpressionAttributeNames={
-                '#s': 'status'
-            },
-            ExpressionAttributeValues={
-                ':s': 'DEPLOYED',
-                ':keys': uploaded,
-                ':url': website_url
-            }
+        update(
+            deployment_id,
+            "DEPLOYED",
+            s3_keys=uploaded,
+            website_url=url,
+            completedAt=datetime.now(timezone.utc).isoformat(),
         )
 
         return {
-            'status': 'DEPLOYED',
-            'objects': uploaded,
-            'website_url': website_url
+            "status": "DEPLOYED",
+            "website_url": url,
+            "files": len(uploaded),
         }
 
     except Exception as exc:
-        table.update_item(
-            Key={
-                'deploymentId': deployment_id
-            },
-            UpdateExpression=(
-                'SET #s = :s, error_msg = :e'
-            ),
-            ExpressionAttributeNames={
-                '#s': 'status'
-            },
-            ExpressionAttributeValues={
-                ':s': 'FAILED',
-                ':e': str(exc)
-            }
+        update(
+            deployment_id,
+            "FAILED",
+            error_msg=str(exc)[:500],
         )
-
         raise
