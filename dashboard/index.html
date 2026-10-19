@@ -1,0 +1,190 @@
+
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>DeployBox — Deployments</title>
+
+  <style>
+    body {
+      font: 16px system-ui, sans-serif;
+      max-width: 980px;
+      margin: 40px auto;
+      padding: 0 18px;
+      background: #f7f8fb;
+      color: #172033;
+    }
+
+    h1 {
+      margin-bottom: 4px;
+    }
+
+    .muted {
+      color: #637083;
+    }
+
+    label {
+      display: block;
+      margin-top: 24px;
+    }
+
+    input,
+    button {
+      font: inherit;
+      padding: 10px;
+      border: 1px solid #b8c2d2;
+      border-radius: 7px;
+    }
+
+    input {
+      width: min(100%, 650px);
+      box-sizing: border-box;
+    }
+
+    button {
+      background: #233d7b;
+      color: white;
+      cursor: pointer;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: white;
+      margin-top: 20px;
+    }
+
+    th,
+    td {
+      text-align: left;
+      padding: 12px;
+      border-bottom: 1px solid #e2e6ed;
+      word-break: break-word;
+    }
+
+    a {
+      color: #2459b6;
+    }
+
+    .status {
+      font-weight: 700;
+    }
+  </style>
+</head>
+
+<body>
+
+  <h1>DeployBox</h1>
+
+  <p class="muted">
+    Public demo deployment history
+  </p>
+
+  <label for="endpoint">
+    Deployments API URL
+  </label>
+
+  <input
+    id="endpoint"
+    placeholder="https://...execute-api.us-east-1.amazonaws.com/Prod/deployments"
+  >
+
+  <button id="load">
+    Load deployments
+  </button>
+
+  <p id="message" role="status"></p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Repository</th>
+        <th>Deployment</th>
+        <th>Status</th>
+        <th>Time (UTC)</th>
+        <th>Site</th>
+      </tr>
+    </thead>
+
+    <tbody id="rows"></tbody>
+  </table>
+
+  <script>
+    const endpoint = document.getElementById("endpoint");
+    const rows = document.getElementById("rows");
+    const message = document.getElementById("message");
+
+    endpoint.value =
+      new URLSearchParams(location.search).get("api") || "";
+
+    document
+      .getElementById("load")
+      .addEventListener("click", async () => {
+        rows.replaceChildren();
+
+        try {
+          const url = new URL(endpoint.value);
+
+          if (url.protocol !== "https:") {
+            throw Error("Use an HTTPS API endpoint");
+          }
+
+          message.textContent = "Loading...";
+
+          const response = await fetch(url);
+
+          if (!response.ok) {
+            throw Error(`API returned ${response.status}`);
+          }
+
+          const data = await response.json();
+
+          for (const deployment of data.deployments || []) {
+            const tr = document.createElement("tr");
+
+            for (const field of [
+              "repo",
+              "deploymentId",
+              "status",
+              "timestamp"
+            ]) {
+              const td = document.createElement("td");
+
+              td.textContent = deployment[field] || "—";
+
+              tr.appendChild(td);
+            }
+
+            const td = document.createElement("td");
+
+            if (deployment.website_url) {
+              const a = document.createElement("a");
+
+              a.href = deployment.website_url;
+              a.textContent = "Open";
+              a.rel = "noopener noreferrer";
+              a.target = "_blank";
+
+              td.appendChild(a);
+            } else {
+              td.textContent = "—";
+            }
+
+            tr.appendChild(td);
+            rows.appendChild(tr);
+          }
+
+          message.textContent =
+            `${(data.deployments || []).length} deployment(s) shown`;
+
+        } catch (error) {
+          message.textContent = error.message;
+        }
+      });
+  </script>
+
+</body>
+</html>
