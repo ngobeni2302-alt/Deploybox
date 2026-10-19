@@ -1,8 +1,25 @@
+
+# Python
 __pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# AWS SAM
 .aws-sam/
 samconfig.toml
+
+# Environment variables and secrets
 .env
+.env.*
+
+# Node.js
 node_modules/
 dist/
+
+# Archives
 *.zip
+
+# VS Code
 .vscode/
