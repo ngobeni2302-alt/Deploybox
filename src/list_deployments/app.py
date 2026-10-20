@@ -5,60 +5,73 @@ import os
 import boto3
 from boto3.dynamodb.conditions import Attr
 
-TABLE = boto3.resource("dynamodb").Table(
+table = boto3.resource("dynamodb").Table(
     os.environ["TABLE_NAME"]
 )
 
+HEADERS = {
+    "Content-Type": "application/json",
+    "Access-Control-Allow-Origin": "*",
+}
+
+
+def respond(status, data):
+    return {
+        "statusCode": status,
+        "headers": HEADERS,
+        "body": json.dumps(data),
+    }
+
 
 def lambda_handler(event, context):
-    # Demo-only endpoint.
-    # Returns up to 100 deployment records.
     params = event.get("queryStringParameters") or {}
     repo = params.get("repo", "")
 
-    if len(repo) > 200:
-        return {
-            "statusCode": 400,
-            "body": json.dumps({"error": "Invalid repo"}),
-        }
+    if not isinstance(repo, str) or len(repo) > 200:
+        return respond(400, {"error": "Invalid repository"})
 
-    kwargs = {"Limit": 100}
+    try:
+        options = {"Limit": 100}
 
-    if repo:
-        kwargs["FilterExpression"] = Attr("repo").eq(repo)
+        if repo:
+            options["FilterExpression"] = Attr("repo").eq(repo)
 
-    result = TABLE.scan(**kwargs)
+        result = table.scan(**options)
 
-    items = sorted(
-        result.get("Items", []),
-        key=lambda item: item.get("timestamp", ""),
-        reverse=True,
-    )
+        items = result.get("Items", [])
 
-    # Only expose fields needed by the dashboard.
-    allowed = (
-        "deploymentId",
-        "repo",
-        "ref",
-        "status",
-        "timestamp",
-        "website_url",
-    )
+        items.sort(
+            key=lambda item: item.get("timestamp", ""),
+            reverse=True,
+        )
 
-    items = [
-        {
-            key: item[key]
-            for key in allowed
-            if key in item
-        }
-        for item in items
-    ]
+        fields = (
+            "deploymentId",
+            "repo",
+            "ref",
+            "status",
+            "timestamp",
+            "completedAt",
+            "website_url",
+            "error_msg",
+        )
 
-    return {
-        "statusCode": 200,
-        "headers": {
-            "Content-Type": "application/json",
-            "Access-Control-Allow-Origin": "*",
-        },
-        "body": json.dumps({"deployments": items}),
-    }
+        deployments = [
+            {
+                key: item[key]
+                for key in fields
+                if key in item
+            }
+            for item in items
+        ]
+
+        return respond(
+            200,
+            {"deployments": deployments},
+        )
+
+    except Exception:
+        return respond(
+            500,
+            {"error": "Unable to load deployments"},
+        )
