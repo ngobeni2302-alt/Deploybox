@@ -1,190 +1,424 @@
 
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-
 <head>
-  <meta charset="utf-8">
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-
-  <title>DeployBox — Deployments</title>
+  <title>DeployBox Dashboard</title>
 
   <style>
+    :root {
+      color-scheme: dark;
+      font-family: system-ui, Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
     body {
-      font: 16px system-ui, sans-serif;
-      max-width: 980px;
-      margin: 40px auto;
-      padding: 0 18px;
-      background: #f7f8fb;
-      color: #172033;
+      margin: 0;
+      background: #0b1120;
+      color: #e5e7eb;
     }
 
-    h1 {
-      margin-bottom: 4px;
+    header {
+      padding: 24px 6%;
+      border-bottom: 1px solid #263244;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
     }
 
-    .muted {
-      color: #637083;
+    h1, h2 { margin-top: 0; }
+
+    .logo {
+      font-size: 26px;
+      font-weight: 800;
+      color: #60a5fa;
     }
 
-    label {
-      display: block;
-      margin-top: 24px;
+    main {
+      max-width: 1150px;
+      margin: 35px auto;
+      padding: 0 20px;
     }
 
-    input,
-    button {
+    .card {
+      background: #111c30;
+      border: 1px solid #29364b;
+      border-radius: 14px;
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+
+    .muted { color: #94a3b8; }
+
+    .form-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    input, button {
+      padding: 12px 14px;
+      border-radius: 8px;
       font: inherit;
-      padding: 10px;
-      border: 1px solid #b8c2d2;
-      border-radius: 7px;
     }
 
     input {
-      width: min(100%, 650px);
-      box-sizing: border-box;
+      flex: 1;
+      min-width: 220px;
+      color: white;
+      background: #0b1120;
+      border: 1px solid #475569;
     }
 
     button {
-      background: #233d7b;
-      color: white;
       cursor: pointer;
+      border: 0;
+      background: #2563eb;
+      color: white;
+      font-weight: 600;
     }
+
+    button:disabled {
+      opacity: .5;
+      cursor: wait;
+    }
+
+    .secondary {
+      background: #334155;
+    }
+
+    .table-wrap { overflow-x: auto; }
 
     table {
       width: 100%;
       border-collapse: collapse;
-      background: white;
-      margin-top: 20px;
+      margin-top: 15px;
     }
 
-    th,
-    td {
+    th, td {
+      padding: 14px 10px;
       text-align: left;
-      padding: 12px;
-      border-bottom: 1px solid #e2e6ed;
-      word-break: break-word;
+      border-bottom: 1px solid #29364b;
     }
 
-    a {
-      color: #2459b6;
-    }
+    th { color: #94a3b8; }
+
+    a { color: #93c5fd; }
 
     .status {
       font-weight: 700;
+    }
+
+    .DEPLOYED { color: #4ade80; }
+    .FAILED { color: #f87171; }
+    .BUILDING { color: #facc15; }
+    .RECEIVED { color: #93c5fd; }
+
+    .message {
+      margin-top: 15px;
+      white-space: pre-wrap;
+    }
+
+    .details {
+      margin-top: 20px;
+      padding: 16px;
+      background: #0b1120;
+      border-radius: 8px;
+      overflow-wrap: anywhere;
+    }
+
+    [hidden] { display: none !important; }
+
+    footer {
+      padding: 25px;
+      text-align: center;
+      color: #64748b;
     }
   </style>
 </head>
 
 <body>
+  <header>
+    <div class="logo">DeployBox</div>
+    <span class="muted">Serverless Deployment Platform</span>
+  </header>
 
-  <h1>DeployBox</h1>
+  <main>
+    <section class="card">
+      <h2>Deploy a GitHub Website</h2>
+      <p class="muted">
+        Enter a public GitHub repository containing a root index.html.
+      </p>
 
-  <p class="muted">
-    Public demo deployment history
-  </p>
+      <form id="deployForm" class="form-row">
+        <input
+          id="repo"
+          placeholder="username/repository"
+          required
+          autocomplete="off"
+        >
 
-  <label for="endpoint">
-    Deployments API URL
-  </label>
+        <input
+          id="ref"
+          placeholder="Branch or ref (optional)"
+          autocomplete="off"
+        >
 
-  <input
-    id="endpoint"
-    placeholder="https://...execute-api.us-east-1.amazonaws.com/Prod/deployments"
-  >
+        <button id="deployButton" type="submit">
+          Deploy
+        </button>
+      </form>
 
-  <button id="load">
-    Load deployments
-  </button>
+      <p id="deployMessage" class="message" role="status"></p>
+    </section>
 
-  <p id="message" role="status"></p>
+    <section class="card">
+      <h2>Deployment History</h2>
+      <p class="muted">
+        Deployment statuses refresh every 10 seconds.
+      </p>
 
-  <table>
-    <thead>
-      <tr>
-        <th>Repository</th>
-        <th>Deployment</th>
-        <th>Status</th>
-        <th>Time (UTC)</th>
-        <th>Site</th>
-      </tr>
-    </thead>
+      <button id="refreshButton" class="secondary">
+        Refresh
+      </button>
 
-    <tbody id="rows"></tbody>
-  </table>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Repository</th>
+              <th>Deployment ID</th>
+              <th>Status</th>
+              <th>Created</th>
+              <th>Website</th>
+              <th>Details</th>
+            </tr>
+          </thead>
+          <tbody id="deployments"></tbody>
+        </table>
+      </div>
+
+      <p id="historyMessage" class="message" role="status"></p>
+    </section>
+
+    <section class="card" id="detailsCard" hidden>
+      <h2>Deployment Details</h2>
+      <div id="details" class="details"></div>
+    </section>
+  </main>
+
+  <footer>
+    DeployBox — AWS Lambda, API Gateway, DynamoDB and S3
+  </footer>
 
   <script>
-    const endpoint = document.getElementById("endpoint");
-    const rows = document.getElementById("rows");
-    const message = document.getElementById("message");
+    "use strict";
 
-    endpoint.value =
-      new URLSearchParams(location.search).get("api") || "";
+    const API =
+      "https://klrm3es403.execute-api.us-east-1.amazonaws.com/Prod";
+
+    const form = document.getElementById("deployForm");
+    const repoInput = document.getElementById("repo");
+    const refInput = document.getElementById("ref");
+    const deployButton = document.getElementById("deployButton");
+    const deployMessage = document.getElementById("deployMessage");
+    const historyMessage = document.getElementById("historyMessage");
+    const tbody = document.getElementById("deployments");
+    const detailsCard = document.getElementById("detailsCard");
+    const detailsBox = document.getElementById("details");
+
+    async function apiRequest(path, options = {}) {
+      const response = await fetch(API + path, options);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.error || `HTTP ${response.status}`
+        );
+      }
+
+      return data;
+    }
+
+    function cell(row, value) {
+      const td = document.createElement("td");
+      td.textContent = value ?? "—";
+      row.appendChild(td);
+      return td;
+    }
+
+    function linkCell(row, url) {
+      const td = document.createElement("td");
+
+      if (url && /^https?:\/\//.test(url)) {
+        const link = document.createElement("a");
+        link.href = url;
+        link.textContent = "Open site";
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        td.appendChild(link);
+      } else {
+        td.textContent = "—";
+      }
+
+      row.appendChild(td);
+    }
+
+    async function loadDeployments() {
+      try {
+        const data = await apiRequest("/deployments");
+        tbody.replaceChildren();
+
+        for (const item of data.deployments || []) {
+          const row = document.createElement("tr");
+
+          cell(row, item.repo);
+          cell(row, item.deploymentId);
+
+          const statusCell = cell(row, item.status);
+          statusCell.className =
+            "status " + (item.status || "");
+
+          cell(row, item.timestamp || "—");
+          linkCell(row, item.website_url);
+
+          const actions = document.createElement("td");
+          const button = document.createElement("button");
+
+          button.textContent = "View";
+          button.className = "secondary";
+
+          button.addEventListener("click", () => {
+            loadDetails(item.deploymentId);
+          });
+
+          actions.appendChild(button);
+          row.appendChild(actions);
+          tbody.appendChild(row);
+        }
+
+        historyMessage.textContent =
+          `${(data.deployments || []).length} deployment(s) displayed`;
+
+      } catch (error) {
+        historyMessage.textContent =
+          "Could not load deployments: " + error.message;
+      }
+    }
+
+    async function loadDetails(id) {
+      detailsCard.hidden = false;
+      detailsBox.textContent = "Loading deployment...";
+
+      try {
+        const result = await apiRequest(
+          "/deployments/" + encodeURIComponent(id)
+        );
+
+        const deployment = result.deployment;
+        detailsBox.replaceChildren();
+
+        const fields = [
+          ["Deployment ID", "deploymentId"],
+          ["Repository", "repo"],
+          ["Git ref", "ref"],
+          ["Status", "status"],
+          ["Created", "timestamp"],
+          ["Completed", "completedAt"],
+          ["Website", "website_url"],
+          ["Error", "error_msg"]
+        ];
+
+        for (const [label, key] of fields) {
+          const p = document.createElement("p");
+          const strong = document.createElement("strong");
+
+          strong.textContent = label + ": ";
+          p.appendChild(strong);
+
+          const value = deployment[key];
+
+          if (key === "website_url" && value) {
+            const a = document.createElement("a");
+            a.href = value;
+            a.textContent = value;
+            a.target = "_blank";
+            a.rel = "noopener noreferrer";
+            p.appendChild(a);
+          } else {
+            p.appendChild(
+              document.createTextNode(value ?? "—")
+            );
+          }
+
+          detailsBox.appendChild(p);
+        }
+
+        if (Array.isArray(deployment.s3_keys)) {
+          const p = document.createElement("p");
+          p.textContent =
+            "Uploaded files: " + deployment.s3_keys.length;
+          detailsBox.appendChild(p);
+        }
+
+      } catch (error) {
+        detailsBox.textContent = error.message;
+      }
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const repo = repoInput.value.trim();
+      const ref = refInput.value.trim();
+
+      if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
+        deployMessage.textContent =
+          "Use the format username/repository";
+        return;
+      }
+
+      deployButton.disabled = true;
+      deployMessage.textContent = "Starting deployment...";
+
+      try {
+        const payload = {
+          repository: { full_name: repo }
+        };
+
+        if (ref) payload.ref = ref;
+
+        const result = await apiRequest("/webhook", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(payload)
+        });
+
+        deployMessage.textContent =
+          "Deployment queued. ID: " + result.deploymentId;
+
+        await loadDeployments();
+
+      } catch (error) {
+        deployMessage.textContent =
+          "Deployment request failed: " + error.message;
+
+      } finally {
+        deployButton.disabled = false;
+      }
+    });
 
     document
-      .getElementById("load")
-      .addEventListener("click", async () => {
-        rows.replaceChildren();
+      .getElementById("refreshButton")
+      .addEventListener("click", loadDeployments);
 
-        try {
-          const url = new URL(endpoint.value);
-
-          if (url.protocol !== "https:") {
-            throw Error("Use an HTTPS API endpoint");
-          }
-
-          message.textContent = "Loading...";
-
-          const response = await fetch(url);
-
-          if (!response.ok) {
-            throw Error(`API returned ${response.status}`);
-          }
-
-          const data = await response.json();
-
-          for (const deployment of data.deployments || []) {
-            const tr = document.createElement("tr");
-
-            for (const field of [
-              "repo",
-              "deploymentId",
-              "status",
-              "timestamp"
-            ]) {
-              const td = document.createElement("td");
-
-              td.textContent = deployment[field] || "—";
-
-              tr.appendChild(td);
-            }
-
-            const td = document.createElement("td");
-
-            if (deployment.website_url) {
-              const a = document.createElement("a");
-
-              a.href = deployment.website_url;
-              a.textContent = "Open";
-              a.rel = "noopener noreferrer";
-              a.target = "_blank";
-
-              td.appendChild(a);
-            } else {
-              td.textContent = "—";
-            }
-
-            tr.appendChild(td);
-            rows.appendChild(tr);
-          }
-
-          message.textContent =
-            `${(data.deployments || []).length} deployment(s) shown`;
-
-        } catch (error) {
-          message.textContent = error.message;
-        }
-      });
+    loadDeployments();
+    setInterval(loadDeployments, 10000);
   </script>
-
 </body>
 </html>
