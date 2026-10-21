@@ -1,11 +1,12 @@
 
+import base64
 import json
 import os
 
 import boto3
 from boto3.dynamodb.conditions import Attr
 
-table = boto3.resource("dynamodb").Table(
+TABLE = boto3.resource("dynamodb").Table(
     os.environ["TABLE_NAME"]
 )
 
@@ -14,12 +15,23 @@ HEADERS = {
     "Access-Control-Allow-Origin": "*",
 }
 
+FIELDS = (
+    "deploymentId",
+    "repo",
+    "ref",
+    "status",
+    "timestamp",
+    "completedAt",
+    "website_url",
+    "error_msg",
+)
 
-def respond(status, data):
+
+def respond(status, body):
     return {
         "statusCode": status,
         "headers": HEADERS,
-        "body": json.dumps(data),
+        "body": json.dumps(body),
     }
 
 
@@ -27,39 +39,76 @@ def lambda_handler(event, context):
     params = event.get("queryStringParameters") or {}
     repo = params.get("repo", "")
 
-    if not isinstance(repo, str) or len(repo) > 200:
-        return respond(400, {"error": "Invalid repository"})
-
     try:
-        options = {"Limit": 100}
+        limit = int(params.get("limit", "50"))
+
+        if not 1 <= limit <= 100:
+            raise ValueError()
+
+        if (
+            not isinstance(repo, str)
+            or len(repo) > 200
+        ):
+            raise ValueError()
+
+        options = {
+            "Limit": limit
+        }
 
         if repo:
-            options["FilterExpression"] = Attr("repo").eq(repo)
+            options["FilterExpression"] = (
+                Attr("repo").eq(repo)
+            )
 
-        result = table.scan(**options)
+        if params.get("cursor"):
+            token = params["cursor"]
 
-        items = result.get("Items", [])
+            if len(token) > 2048:
+                raise ValueError()
 
-        items.sort(
-            key=lambda item: item.get("timestamp", ""),
+            options["ExclusiveStartKey"] = (
+                json.loads(
+                    base64.urlsafe_b64decode(
+                        token + "=" * (-len(token) % 4)
+                    ).decode()
+                )
+            )
+
+    except (
+        ValueError,
+        TypeError,
+        KeyError,
+        json.JSONDecodeError,
+    ):
+        return respond(
+            400,
+            {
+                "error": "Invalid repo, limit or cursor"
+            },
+        )
+
+    try:
+        result = TABLE.scan(**options)
+
+        items = sorted(
+            result.get("Items", []),
+            key=lambda x: x.get("timestamp", ""),
             reverse=True,
         )
 
-        fields = (
-            "deploymentId",
-            "repo",
-            "ref",
-            "status",
-            "timestamp",
-            "completedAt",
-            "website_url",
-            "error_msg",
-        )
+        cursor = None
+
+        if result.get("LastEvaluatedKey"):
+            cursor = base64.urlsafe_b64encode(
+                json.dumps(
+                    result["LastEvaluatedKey"]
+                ).encode()
+            ).decode().rstrip("=")
 
         deployments = [
             {
                 key: item[key]
-                for key in fields
+                for key in FIELDS
                 if key in item
             }
             for item in items
@@ -67,11 +116,16 @@ def lambda_handler(event, context):
 
         return respond(
             200,
-            {"deployments": deployments},
+            {
+                "deployments": deployments,
+                "nextCursor": cursor,
+            },
         )
 
     except Exception:
         return respond(
             500,
-            {"error": "Unable to load deployments"},
+            {
+                "error": "Unable to load deployments"
+            },
         )
