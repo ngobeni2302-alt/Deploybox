@@ -2,7 +2,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 
-Description: DeployBox - 80 percent dashboard with CORS fix
+Description: DeployBox - Serverless static website deployment platform
 
 Globals:
   Function:
@@ -20,10 +20,6 @@ Resources:
     Type: AWS::Serverless::Api
     Properties:
       StageName: Prod
-      Cors:
-        AllowOrigin: "'*'"
-        AllowMethods: "'GET,POST,OPTIONS'"
-        AllowHeaders: "'Content-Type'"
 
   # ==========================================
   # DEPLOYMENT S3 BUCKET
@@ -147,6 +143,13 @@ Resources:
             RestApiId: !Ref ServerlessRestApi
             Path: /webhook
             Method: post
+
+        WebhookPreflight:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ServerlessRestApi
+            Path: /webhook
+            Method: options
 
   # ==========================================
   # DEPLOY ENGINE LAMBDA
