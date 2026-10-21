@@ -12,7 +12,9 @@
       font-family: system-ui, Arial, sans-serif;
     }
 
-    * { box-sizing: border-box; }
+    * {
+      box-sizing: border-box;
+    }
 
     body {
       margin: 0;
@@ -28,7 +30,9 @@
       align-items: center;
     }
 
-    h1, h2 { margin-top: 0; }
+    h1, h2 {
+      margin-top: 0;
+    }
 
     .logo {
       font-size: 26px;
@@ -50,7 +54,9 @@
       margin-bottom: 24px;
     }
 
-    .muted { color: #94a3b8; }
+    .muted {
+      color: #94a3b8;
+    }
 
     .form-row {
       display: flex;
@@ -90,7 +96,9 @@
       background: #334155;
     }
 
-    .table-wrap { overflow-x: auto; }
+    .table-wrap {
+      overflow-x: auto;
+    }
 
     table {
       width: 100%;
@@ -104,18 +112,33 @@
       border-bottom: 1px solid #29364b;
     }
 
-    th { color: #94a3b8; }
+    th {
+      color: #94a3b8;
+    }
 
-    a { color: #93c5fd; }
+    a {
+      color: #93c5fd;
+    }
 
     .status {
       font-weight: 700;
     }
 
-    .DEPLOYED { color: #4ade80; }
-    .FAILED { color: #f87171; }
-    .BUILDING { color: #facc15; }
-    .RECEIVED { color: #93c5fd; }
+    .DEPLOYED {
+      color: #4ade80;
+    }
+
+    .FAILED {
+      color: #f87171;
+    }
+
+    .BUILDING {
+      color: #facc15;
+    }
+
+    .RECEIVED {
+      color: #93c5fd;
+    }
 
     .message {
       margin-top: 15px;
@@ -130,7 +153,9 @@
       overflow-wrap: anywhere;
     }
 
-    [hidden] { display: none !important; }
+    [hidden] {
+      display: none !important;
+    }
 
     footer {
       padding: 25px;
@@ -149,6 +174,7 @@
   <main>
     <section class="card">
       <h2>Deploy a GitHub Website</h2>
+
       <p class="muted">
         Enter a public GitHub repository containing a root index.html.
       </p>
@@ -172,16 +198,24 @@
         </button>
       </form>
 
-      <p id="deployMessage" class="message" role="status"></p>
+      <p
+        id="deployMessage"
+        class="message"
+        role="status"
+      ></p>
     </section>
 
     <section class="card">
       <h2>Deployment History</h2>
+
       <p class="muted">
-        Deployment statuses refresh every 10 seconds.
+        Latest page of deployments refreshes every 10 seconds.
       </p>
 
-      <button id="refreshButton" class="secondary">
+      <button
+        id="refreshButton"
+        class="secondary"
+      >
         Refresh
       </button>
 
@@ -197,14 +231,31 @@
               <th>Details</th>
             </tr>
           </thead>
+
           <tbody id="deployments"></tbody>
         </table>
       </div>
 
-      <p id="historyMessage" class="message" role="status"></p>
+      <p
+        id="historyMessage"
+        class="message"
+        role="status"
+      ></p>
+
+      <button
+        id="moreButton"
+        class="secondary"
+        hidden
+      >
+        Load more
+      </button>
     </section>
 
-    <section class="card" id="detailsCard" hidden>
+    <section
+      class="card"
+      id="detailsCard"
+      hidden
+    >
       <h2>Deployment Details</h2>
       <div id="details" class="details"></div>
     </section>
@@ -230,6 +281,8 @@
     const detailsCard = document.getElementById("detailsCard");
     const detailsBox = document.getElementById("details");
 
+    let nextCursor = null;
+
     async function apiRequest(path, options = {}) {
       const response = await fetch(API + path, options);
       const data = await response.json();
@@ -245,8 +298,10 @@
 
     function cell(row, value) {
       const td = document.createElement("td");
+
       td.textContent = value ?? "—";
       row.appendChild(td);
+
       return td;
     }
 
@@ -255,10 +310,12 @@
 
       if (url && /^https?:\/\//.test(url)) {
         const link = document.createElement("a");
+
         link.href = url;
         link.textContent = "Open site";
         link.target = "_blank";
         link.rel = "noopener noreferrer";
+
         td.appendChild(link);
       } else {
         td.textContent = "—";
@@ -267,10 +324,26 @@
       row.appendChild(td);
     }
 
-    async function loadDeployments() {
+    async function loadDeployments(append = false) {
       try {
-        const data = await apiRequest("/deployments");
-        tbody.replaceChildren();
+        const path =
+          "/deployments?limit=50" +
+          (
+            append && nextCursor
+              ? "&cursor=" + encodeURIComponent(nextCursor)
+              : ""
+          );
+
+        const data = await apiRequest(path);
+
+        if (!append) {
+          tbody.replaceChildren();
+        }
+
+        nextCursor = data.nextCursor || null;
+
+        document.getElementById("moreButton").hidden =
+          !nextCursor;
 
         for (const item of data.deployments || []) {
           const row = document.createElement("tr");
@@ -279,6 +352,7 @@
           cell(row, item.deploymentId);
 
           const statusCell = cell(row, item.status);
+
           statusCell.className =
             "status " + (item.status || "");
 
@@ -301,7 +375,7 @@
         }
 
         historyMessage.textContent =
-          `${(data.deployments || []).length} deployment(s) displayed`;
+          `${tbody.rows.length} deployment(s) displayed`;
 
       } catch (error) {
         historyMessage.textContent =
@@ -343,10 +417,12 @@
 
           if (key === "website_url" && value) {
             const a = document.createElement("a");
+
             a.href = value;
             a.textContent = value;
             a.target = "_blank";
             a.rel = "noopener noreferrer";
+
             p.appendChild(a);
           } else {
             p.appendChild(
@@ -359,8 +435,10 @@
 
         if (Array.isArray(deployment.s3_keys)) {
           const p = document.createElement("p");
+
           p.textContent =
             "Uploaded files: " + deployment.s3_keys.length;
+
           detailsBox.appendChild(p);
         }
 
@@ -375,7 +453,9 @@
       const repo = repoInput.value.trim();
       const ref = refInput.value.trim();
 
-      if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) {
+      if (
+        !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)
+      ) {
         deployMessage.textContent =
           "Use the format username/repository";
         return;
@@ -386,10 +466,14 @@
 
       try {
         const payload = {
-          repository: { full_name: repo }
+          repository: {
+            full_name: repo
+          }
         };
 
-        if (ref) payload.ref = ref;
+        if (ref) {
+          payload.ref = ref;
+        }
 
         const result = await apiRequest("/webhook", {
           method: "POST",
@@ -415,10 +499,18 @@
 
     document
       .getElementById("refreshButton")
-      .addEventListener("click", loadDeployments);
+      .addEventListener("click", () => loadDeployments());
+
+    document
+      .getElementById("moreButton")
+      .addEventListener("click", () => loadDeployments(true));
 
     loadDeployments();
-    setInterval(loadDeployments, 10000);
+
+    setInterval(
+      () => loadDeployments(),
+      10000
+    );
   </script>
 </body>
 </html>
