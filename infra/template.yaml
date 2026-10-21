@@ -2,7 +2,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 
-Description: DeployBox - Serverless static website deployment platform
+Description: DeployBox - serverless static site deployment
 
 Globals:
   Function:
@@ -12,31 +12,20 @@ Globals:
 
 Resources:
 
-  # ==========================================
-  # API GATEWAY
-  # ==========================================
-
   ServerlessRestApi:
     Type: AWS::Serverless::Api
     Properties:
       StageName: Prod
 
-  # ==========================================
-  # DEPLOYMENT S3 BUCKET
-  # ==========================================
-
   DeployBucket:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Sub deploybox-assets-${AWS::AccountId}
-
       VersioningConfiguration:
         Status: Enabled
-
       WebsiteConfiguration:
         IndexDocument: index.html
         ErrorDocument: index.html
-
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         IgnorePublicAcls: true
@@ -47,7 +36,6 @@ Resources:
     Type: AWS::S3::BucketPolicy
     Properties:
       Bucket: !Ref DeployBucket
-
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -56,18 +44,12 @@ Resources:
             Action: s3:GetObject
             Resource: !Sub '${DeployBucket.Arn}/*'
 
-  # ==========================================
-  # DASHBOARD S3 BUCKET
-  # ==========================================
-
   DashboardBucket:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Sub deploybox-dashboard-${AWS::AccountId}
-
       WebsiteConfiguration:
         IndexDocument: index.html
-
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         IgnorePublicAcls: true
@@ -78,7 +60,6 @@ Resources:
     Type: AWS::S3::BucketPolicy
     Properties:
       Bucket: !Ref DashboardBucket
-
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -87,55 +68,37 @@ Resources:
             Action: s3:GetObject
             Resource: !Sub '${DashboardBucket.Arn}/*'
 
-  # ==========================================
-  # DYNAMODB
-  # ==========================================
-
   DeploymentTable:
     Type: AWS::DynamoDB::Table
     Properties:
       TableName: deploybox-deployments
       BillingMode: PAY_PER_REQUEST
-
       AttributeDefinitions:
         - AttributeName: deploymentId
           AttributeType: S
-
       KeySchema:
         - AttributeName: deploymentId
           KeyType: HASH
-
-  # ==========================================
-  # SNS
-  # ==========================================
 
   NotifyTopic:
     Type: AWS::SNS::Topic
     Properties:
       TopicName: deploybox-notifications
 
-  # ==========================================
-  # WEBHOOK LAMBDA
-  # ==========================================
-
   WebhookHandlerFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: ../src/webhook_handler/
       Handler: app.lambda_handler
-
       Environment:
         Variables:
           TABLE_NAME: !Ref DeploymentTable
           DEPLOY_ENGINE_FUNCTION: !Ref DeployEngineFunction
-
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref DeploymentTable
-
         - LambdaInvokePolicy:
             FunctionName: !Ref DeployEngineFunction
-
       Events:
         Webhook:
           Type: Api
@@ -143,7 +106,6 @@ Resources:
             RestApiId: !Ref ServerlessRestApi
             Path: /webhook
             Method: post
-
         WebhookPreflight:
           Type: Api
           Properties:
@@ -151,50 +113,36 @@ Resources:
             Path: /webhook
             Method: options
 
-  # ==========================================
-  # DEPLOY ENGINE LAMBDA
-  # ==========================================
-
   DeployEngineFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: ../src/deploy_engine/
       Handler: app.lambda_handler
       Timeout: 120
-
       Environment:
         Variables:
           TABLE_NAME: !Ref DeploymentTable
           DEPLOY_BUCKET: !Ref DeployBucket
-
+          NOTIFIER_FUNCTION: !Ref NotifierFunction
       Policies:
         - S3CrudPolicy:
             BucketName: !Ref DeployBucket
-
         - DynamoDBCrudPolicy:
             TableName: !Ref DeploymentTable
-
-        - SNSPublishMessagePolicy:
-            TopicName: !GetAtt NotifyTopic.TopicName
-
-  # ==========================================
-  # LIST DEPLOYMENTS LAMBDA
-  # ==========================================
+        - LambdaInvokePolicy:
+            FunctionName: !Ref NotifierFunction
 
   ListDeploymentsFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: ../src/list_deployments/
       Handler: app.lambda_handler
-
       Environment:
         Variables:
           TABLE_NAME: !Ref DeploymentTable
-
       Policies:
         - DynamoDBReadPolicy:
             TableName: !Ref DeploymentTable
-
       Events:
         History:
           Type: Api
@@ -203,24 +151,17 @@ Resources:
             Path: /deployments
             Method: get
 
-  # ==========================================
-  # GET DEPLOYMENT DETAILS LAMBDA
-  # ==========================================
-
   GetDeploymentFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: ../src/get_deployment/
       Handler: app.lambda_handler
-
       Environment:
         Variables:
           TABLE_NAME: !Ref DeploymentTable
-
       Policies:
         - DynamoDBReadPolicy:
             TableName: !Ref DeploymentTable
-
       Events:
         Details:
           Type: Api
@@ -229,30 +170,19 @@ Resources:
             Path: /deployments/{deploymentId}
             Method: get
 
-  # ==========================================
-  # NOTIFIER LAMBDA
-  # ==========================================
-
   NotifierFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: ../src/notifier/
       Handler: app.lambda_handler
-
       Environment:
         Variables:
           SNS_TOPIC: !Ref NotifyTopic
-
       Policies:
         - SNSPublishMessagePolicy:
             TopicName: !GetAtt NotifyTopic.TopicName
 
-# ==========================================
-# OUTPUTS
-# ==========================================
-
 Outputs:
-
   ApiEndpoint:
     Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/webhook'
 
