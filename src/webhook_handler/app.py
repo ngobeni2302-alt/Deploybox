@@ -7,29 +7,21 @@ from datetime import datetime, timezone
 
 import boto3
 
+DYNAMODB = boto3.resource("dynamodb")
+LAMBDA = boto3.client("lambda")
 
-# ==========================================
-# AWS CLIENTS
-# ==========================================
-
-dynamodb = boto3.resource("dynamodb")
-lambda_client = boto3.client("lambda")
-
-TABLE = os.environ["TABLE_NAME"]
+TABLE_NAME = os.environ["TABLE_NAME"]
 ENGINE = os.environ["DEPLOY_ENGINE_FUNCTION"]
 
-REPO_PATTERN = re.compile(
+REPOSITORY = re.compile(
     r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z"
 )
+REF = re.compile(r"[A-Za-z0-9_./-]+\Z")
 
 
-# ==========================================
-# API RESPONSE HELPER
-# ==========================================
-
-def response(code, body):
+def response(status, payload):
     return {
-        "statusCode": code,
+        "statusCode": status,
         "headers": {
             "Content-Type": "application/json",
             "Access-Control-Allow-Origin": "*",
@@ -37,65 +29,45 @@ def response(code, body):
             "Access-Control-Allow-Headers": "Content-Type",
             "Access-Control-Max-Age": "600",
         },
-        "body": json.dumps(body),
+        "body": json.dumps(payload),
     }
 
 
-# ==========================================
-# WEBHOOK HANDLER
-# ==========================================
-
 def lambda_handler(event, context):
-
-    # --------------------------------------
-    # Handle browser CORS preflight requests
-    # --------------------------------------
-
-    method = (event.get("httpMethod") or "").upper()
+    method = (event.get("httpMethod") or "POST").upper()
 
     if method == "OPTIONS":
         return response(
             200,
-            {
-                "message": "CORS preflight accepted"
-            },
+            {"message": "CORS preflight accepted"},
         )
 
-    # --------------------------------------
-    # Reject unsupported HTTP methods
-    # --------------------------------------
-
-    if method and method != "POST":
+    if method != "POST":
         return response(
             405,
-            {
-                "error": "Method not allowed"
-            },
+            {"error": "Method not allowed"},
         )
 
-    # --------------------------------------
-    # Validate deployment request
-    # --------------------------------------
-
     try:
-        body = event.get("body") or "{}"
+        raw = event.get("body") or "{}"
+
+        if isinstance(raw, str) and len(raw) > 8192:
+            raise ValueError("Request body too large")
 
         data = (
-            json.loads(body)
-            if isinstance(body, str)
-            else body
+            json.loads(raw)
+            if isinstance(raw, str)
+            else raw
         )
 
         if not isinstance(data, dict):
-            raise ValueError(
-                "Body must be an object"
-            )
+            raise ValueError("Body must be an object")
 
-        repo_data = data.get("repository") or {}
+        repository = data.get("repository")
 
         repo = (
-            repo_data.get("full_name")
-            if isinstance(repo_data, dict)
+            repository.get("full_name")
+            if isinstance(repository, dict)
             else None
         )
 
@@ -103,7 +75,7 @@ def lambda_handler(event, context):
 
         if (
             not isinstance(repo, str)
-            or not REPO_PATTERN.fullmatch(repo)
+            or not REPOSITORY.fullmatch(repo)
         ):
             raise ValueError(
                 "repository.full_name must be owner/repo"
@@ -112,35 +84,20 @@ def lambda_handler(event, context):
         if (
             not isinstance(ref, str)
             or len(ref) > 200
-            or not re.fullmatch(
-                r"[A-Za-z0-9_./-]+",
-                ref
-            )
+            or not REF.fullmatch(ref)
             or ".." in ref
+            or ref.startswith("/")
         ):
-            raise ValueError(
-                "Invalid ref"
-            )
+            raise ValueError("Invalid ref")
 
-    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+    except (ValueError, TypeError) as exc:
         return response(
             400,
-            {
-                "error": str(exc)
-            },
+            {"error": str(exc)},
         )
 
-    # --------------------------------------
-    # Generate deployment ID
-    # --------------------------------------
-
     deployment_id = uuid.uuid4().hex[:12]
-
-    table = dynamodb.Table(TABLE)
-
-    # --------------------------------------
-    # Save deployment in DynamoDB
-    # --------------------------------------
+    table = DYNAMODB.Table(TABLE_NAME)
 
     try:
         table.put_item(
@@ -158,17 +115,11 @@ def lambda_handler(event, context):
     except Exception:
         return response(
             500,
-            {
-                "error": "Could not create deployment record"
-            },
+            {"error": "Could not save deployment"},
         )
 
-    # --------------------------------------
-    # Invoke deployment engine asynchronously
-    # --------------------------------------
-
     try:
-        result = lambda_client.invoke(
+        result = LAMBDA.invoke(
             FunctionName=ENGINE,
             InvocationType="Event",
             Payload=json.dumps(
@@ -182,11 +133,10 @@ def lambda_handler(event, context):
 
         if result.get("StatusCode") != 202:
             raise RuntimeError(
-                "Asynchronous Lambda invocation not accepted"
+                "Deployment engine did not accept request"
             )
 
-    except Exception as exc:
-
+    except Exception:
         table.update_item(
             Key={
                 "deploymentId": deployment_id
@@ -199,21 +149,17 @@ def lambda_handler(event, context):
             },
             ExpressionAttributeValues={
                 ":s": "FAILED",
-                ":e": str(exc)[:500],
+                ":e": "Could not queue deployment",
             },
         )
 
         return response(
             502,
             {
-                "error": "Deployment could not be started",
+                "error": "Could not queue deployment",
                 "deploymentId": deployment_id,
             },
         )
-
-    # --------------------------------------
-    # Return successful deployment request
-    # --------------------------------------
 
     return response(
         202,
