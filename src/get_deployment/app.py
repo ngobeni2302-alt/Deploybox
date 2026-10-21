@@ -26,17 +26,28 @@ def lambda_handler(event, context):
     params = event.get("pathParameters") or {}
     deployment_id = params.get("deploymentId", "")
 
-    if not deployment_id or len(deployment_id) > 100:
-        return respond(400, {"error": "Invalid deployment ID"})
+    if (
+        not deployment_id
+        or len(deployment_id) > 100
+    ):
+        return respond(
+            400,
+            {"error": "Invalid deployment ID"},
+        )
 
     try:
         result = table.get_item(
-            Key={"deploymentId": deployment_id}
+            Key={
+                "deploymentId": deployment_id
+            }
         )
+
     except Exception:
         return respond(
             500,
-            {"error": "Could not retrieve deployment"},
+            {
+                "error": "Could not retrieve deployment"
+            },
         )
 
     item = result.get("Item")
@@ -44,7 +55,9 @@ def lambda_handler(event, context):
     if not item:
         return respond(
             404,
-            {"error": "Deployment not found"},
+            {
+                "error": "Deployment not found"
+            },
         )
 
     fields = (
@@ -67,5 +80,7 @@ def lambda_handler(event, context):
 
     return respond(
         200,
-        {"deployment": deployment},
+        {
+            "deployment": deployment
+        },
     )
